@@ -32,7 +32,12 @@ namespace Machina.FFXIV
     /// </summary>
     public class FFXIVNetworkMonitor : IDisposable
     {
-
+        public enum ConnectionType
+        {
+            Game,
+            Lobby
+        }
+        
         /// <summary>
         /// Specifies the type of monitor to use - Raw socket or WinPCap
         /// </summary>
@@ -81,25 +86,25 @@ namespace Machina.FFXIV
         { get; set; } = @"C:\Program Files (x86)\FINAL FANTASY XIV - A Realm Reborn\game\ffxiv_dx11.exe";
 
         #region Message Delegates section
-        public delegate void MessageReceived2(TCPConnection connection, long epoch, byte[] message);
+        public delegate void MessageReceived2(TCPConnection connection, long epoch, byte[] message, int set, ConnectionType connectionType);
 
         /// <summary>
         /// Specifies the delegate that is called when data is received and successfully decoded.
         /// </summary>
         public MessageReceived2 MessageReceivedEventHandler;
 
-        public void OnMessageReceived(TCPConnection connection, long epoch, byte[] message)
+        public void OnMessageReceived(TCPConnection connection, long epoch, byte[] message, int set, ConnectionType connectionType)
         {
-            MessageReceivedEventHandler?.Invoke(connection, epoch, message);
+            MessageReceivedEventHandler?.Invoke(connection, epoch, message, set, connectionType);
         }
 
-        public delegate void MessageSent2(TCPConnection connection, long epoch, byte[] message);
+        public delegate void MessageSent2(TCPConnection connection, long epoch, byte[] message, int set, ConnectionType connectionType);
 
         public MessageSent2 MessageSentEventHandler;
 
-        public void OnMessageSent(TCPConnection connection, long epoch, byte[] message)
+        public void OnMessageSent(TCPConnection connection, long epoch, byte[] message, int set, ConnectionType connectionType)
         {
-            MessageSentEventHandler?.Invoke(connection, epoch, message);
+            MessageSentEventHandler?.Invoke(connection, epoch, message, set, connectionType);
         }
 
         #endregion
@@ -159,27 +164,35 @@ namespace Machina.FFXIV
 
         public void ProcessSentMessage(TCPConnection connection, byte[] data)
         {
-            Tuple<long, byte[]> message;
+            Tuple<long, byte[], int> message;
             if (!_sentDecoders.ContainsKey(connection.ID))
                 _sentDecoders.Add(connection.ID, new FFXIVBundleDecoder());
 
             _sentDecoders[connection.ID].StoreData(data);
+            ConnectionType connType = ConnectionType.Game;
+            if (connection.RemotePort == 54994)
+                connType = ConnectionType.Lobby;
+            
             while ((message = _sentDecoders[connection.ID].GetNextFFXIVMessage()) != null)
             {
-                OnMessageSent(connection, message.Item1, message.Item2);
+                OnMessageSent(connection, message.Item1, message.Item2, message.Item3, connType);
             }
         }
 
         public void ProcessReceivedMessage(TCPConnection connection, byte[] data)
         {
-            Tuple<long, byte[]> message;
+            Tuple<long, byte[], int> message;
             if (!_receivedDecoders.ContainsKey(connection.ID))
                 _receivedDecoders.Add(connection.ID, new FFXIVBundleDecoder());
 
             _receivedDecoders[connection.ID].StoreData(data);
+            ConnectionType connType = ConnectionType.Game;
+            if (connection.RemotePort == 54994)
+                connType = ConnectionType.Lobby;
+            
             while ((message = _receivedDecoders[connection.ID].GetNextFFXIVMessage()) != null)
             {
-                OnMessageReceived(connection, message.Item1, message.Item2);
+                OnMessageReceived(connection, message.Item1, message.Item2, message.Item3, connType);
             }
 
         }

@@ -28,10 +28,11 @@ namespace Machina.FFXIV
         private byte[] _bundleBuffer;
         private readonly byte[] _decompressionBuffer = new byte[1024 * 128];
         private int _allocated;
+        private int _set;
 
         private Oodle.IOodleWrapper _oodle;
 
-        public Queue<Tuple<long, byte[]>> Messages = new Queue<Tuple<long, byte[]>>(20);
+        public Queue<Tuple<long, byte[], int>> Messages = new Queue<Tuple<long, byte[], int>>(20);
 
         public DateTime LastMessageTimestamp
         { get; set; } = DateTime.MinValue;
@@ -110,6 +111,11 @@ namespace Machina.FFXIV
                         offset = ResetStream(offset);
                         continue;
                     }
+                    
+                    if (_set == 0)
+                        _set = 1;
+                    else if (_set == 1)
+                        _set = 0;
 
                     offset += (int)header.length;
                     if (offset == _allocated)
@@ -126,8 +132,8 @@ namespace Machina.FFXIV
                                 byte[] data = new byte[message_length];
                                 Array.Copy(message, message_offset, data, 0, data.Length);
 
-                                Messages.Enqueue(new Tuple<long, byte[]>(
-                                    (long)ConversionUtility.ntohq(header.epoch), data));
+                                Messages.Enqueue(new Tuple<long, byte[], int>(
+                                    (long)ConversionUtility.ntohq(header.epoch), data, _set));
 
                                 message_offset += message_length;
                                 if (message_offset > messageBufferSize)
@@ -149,7 +155,7 @@ namespace Machina.FFXIV
             }
         }
 
-        public unsafe Tuple<long, byte[]> GetNextFFXIVMessage()
+        public unsafe Tuple<long, byte[], int> GetNextFFXIVMessage()
         {
             return Messages.Count > 0 ? Messages.Dequeue() : null;
         }
