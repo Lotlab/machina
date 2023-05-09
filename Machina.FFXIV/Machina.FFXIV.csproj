@@ -6,11 +6,11 @@
     </PropertyGroup>
     
     <PropertyGroup>
-        <Version>2.3.6.3</Version>
-        <AssemblyVersion>2.3.6.3</AssemblyVersion>
-        <FileVersion>2.3.6.3</FileVersion>
+        <Version>2.3.7.2</Version>
+        <AssemblyVersion>2.3.7.2</AssemblyVersion>
+        <FileVersion>2.3.7.2</FileVersion>
         <EnableNETAnalyzers>true</EnableNETAnalyzers>
-        <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     
@@ -32,6 +32,8 @@
     </PropertyGroup>
  
     <ItemGroup>
+        <None Remove="Deucalion\Distrib\deucalion-0.9.3.dll" />
+        <None Remove="Deucalion\Distrib\deucalion-debug.dll" />
         <None Remove="Ravahn.Machina.Keyfile.snk" />
     </ItemGroup>
 
@@ -56,6 +58,7 @@
     <RepositoryUrl>https://github.com/ravahn/machina</RepositoryUrl>
   </PropertyGroup>
     <ItemGroup>
+        <EmbeddedResource Include="Deucalion\Distrib\deucalion-0.9.3.dll" />
         <EmbeddedResource Include="Headers\Opcodes\Chinese.txt" />
         <EmbeddedResource Include="Headers\Opcodes\Global.txt" />
         <EmbeddedResource Include="Headers\Opcodes\Korean.txt" />

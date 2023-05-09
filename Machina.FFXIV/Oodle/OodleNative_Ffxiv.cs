@@ -93,7 +93,7 @@ namespace Machina.FFXIV.Oodle
 
             try
             {
-                if (!System.IO.File.Exists(path))
+                if (!File.Exists(path))
                 {
                     Trace.WriteLine($"{nameof(OodleNative_Ffxiv)}: ffxiv_dx11 executable at path {path} does not exist.", "DEBUG-MACHINA");
                     return;
@@ -105,8 +105,12 @@ namespace Machina.FFXIV.Oodle
                         return;
 
                     // Copy file to temp directory
-                    _libraryTempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".exe");
-                    System.IO.File.Copy(path, _libraryTempPath, true);
+                    _libraryTempPath = Path.Combine(Path.GetTempPath(), "Machina.FFXIV", Guid.NewGuid().ToString() + ".exe");
+
+                    if (!Directory.Exists(_libraryTempPath.Substring(0, _libraryTempPath.LastIndexOf("\\", StringComparison.Ordinal) + 1)))
+                        _ = Directory.CreateDirectory(_libraryTempPath.Substring(0, _libraryTempPath.LastIndexOf("\\", StringComparison.Ordinal) + 1));
+
+                    File.Copy(path, _libraryTempPath, true);
 
                     _libraryHandle = NativeMethods.LoadLibraryW(_libraryTempPath);
                     if (_libraryHandle == IntPtr.Zero)
@@ -203,11 +207,11 @@ namespace Machina.FFXIV.Oodle
                         _libraryHandle = IntPtr.Zero;
                     }
 
-                    if (System.IO.File.Exists(_libraryTempPath))
+                    if (File.Exists(_libraryTempPath))
                     {
                         try
                         {
-                            System.IO.File.Delete(_libraryTempPath);
+                            File.Delete(_libraryTempPath);
                         }
                         catch
                         {
