@@ -162,20 +162,20 @@ namespace Machina.FFXIV.Deucalion
         private readonly byte[] _streamBuffer = new byte[short.MaxValue * 2];
         private int _streamBufferIndex;
 
-        public delegate void MessageReceivedHandler(byte[] message);
+        public delegate void MessageReceivedHandler(byte[] message, FFXIVNetworkMonitor.ConnectionType channel);
         public MessageReceivedHandler MessageReceived;
 
-        public delegate void MessageSentHandler(byte[] message);
+        public delegate void MessageSentHandler(byte[] message, FFXIVNetworkMonitor.ConnectionType channel);
         public MessageSentHandler MessageSent;
 
-        public void OnMessageReceived(byte[] message)
+        public void OnMessageReceived(byte[] message, FFXIVNetworkMonitor.ConnectionType connTyoe)
         {
-            MessageReceived?.Invoke(message);
+            MessageReceived?.Invoke(message, connTyoe);
         }
 
-        public void OnMessageSent(byte[] message)
+        public void OnMessageSent(byte[] message, FFXIVNetworkMonitor.ConnectionType connType)
         {
-            MessageSent?.Invoke(message);
+            MessageSent?.Invoke(message, connType);
         }
 
         public unsafe void Connect(int processId)
@@ -196,7 +196,7 @@ namespace Machina.FFXIV.Deucalion
                 byte[] buffer = new byte[short.MaxValue];
 
                 // Expect a result after initial connection
-                DeucalionMessage result = ReadPipe(buffer, _tokenSource.Token).FirstOrDefault();
+                var (result, _) = ReadPipe(buffer, _tokenSource.Token).FirstOrDefault();
                 if (result.header.Opcode != DeucalionOpcode.Debug || !result.debug.StartsWith("SERVER HELLO", StringComparison.OrdinalIgnoreCase))
                 {
                     Trace.WriteLine($"DeucalionClient: Named pipe connected, but received unexpected response: ({result.header.Opcode} {result.debug}).", "DEBUG-MACHINA");
@@ -277,19 +277,23 @@ namespace Machina.FFXIV.Deucalion
                                 }
                             }, token);
                         }
-                        DeucalionMessage[] messages = ReadPipe(buffer, token);
-                        if (messages == Array.Empty<DeucalionMessage>())
+                        var messages = ReadPipe(buffer, token);
+                        if (messages.Length == 0)
                         {
                             Task.Delay(10, token).Wait(token);
                             continue;
                         }
 
-                        foreach (DeucalionMessage message in messages)
+                        foreach (var (message, channel) in messages)
                         {
+                            var connectionType = FFXIVNetworkMonitor.ConnectionType.Game;
+                            if (channel == DeucalionChannel.Lobby)
+                                connectionType = FFXIVNetworkMonitor.ConnectionType.Lobby;
+
                             if (message.header.Opcode == DeucalionOpcode.Recv)
-                                OnMessageReceived(message.data);
+                                OnMessageReceived(message.data, connectionType);
                             if (message.header.Opcode == DeucalionOpcode.Send)
-                                OnMessageSent(message.data);
+                                OnMessageSent(message.data, connectionType);
                         }
                     }
                     catch (OperationCanceledException)
@@ -315,9 +319,9 @@ namespace Machina.FFXIV.Deucalion
             }
         }
 
-        private unsafe DeucalionMessage[] ReadPipe(byte[] buffer, CancellationToken token)
+        private unsafe (DeucalionMessage, DeucalionChannel)[] ReadPipe(byte[] buffer, CancellationToken token)
         {
-            List<DeucalionMessage> response = new List<DeucalionMessage>();
+            List<(DeucalionMessage, DeucalionChannel)> response = new List<(DeucalionMessage, DeucalionChannel)>();
 
             // read all available data into the supplied buffer
             Task<int> readerTask = _clientStream.ReadAsync(buffer, 0, buffer.Length, token);
@@ -389,15 +393,13 @@ namespace Machina.FFXIV.Deucalion
                             break;
                         case DeucalionOpcode.Debug:
                             Trace.WriteLine($"DeucalionClient: Debug Channel {newMessage.header.channel} Opcode {newMessage.header.Opcode} message: {newMessage.debug}", "DEBUG-MACHINA");
-                            response.Add(newMessage);
+                            response.Add((newMessage, messagePtr->channel));
                             break;
                         case DeucalionOpcode.Recv:
-                            if (messagePtr->channel == DeucalionChannel.Zone)
-                                response.Add(newMessage);
+                            response.Add((newMessage, messagePtr->channel));
                             break;
                         case DeucalionOpcode.Send:
-                            if (messagePtr->channel == DeucalionChannel.Zone)
-                                response.Add(newMessage);
+                            response.Add((newMessage, messagePtr->channel));
                             break;
                         case DeucalionOpcode.Exit:
                             Trace.WriteLine("DeucalionClient: Received exit opcode from injected code.", "DEBUG-MACHINA");

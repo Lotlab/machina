@@ -115,6 +115,7 @@ namespace Machina.FFXIV
         private TCPNetworkMonitor _monitor;
         private DeucalionClient _deucalionClient;
         private bool _disposedValue;
+        private bool _deucalionSet = false;
 
         private readonly Dictionary<string, FFXIVBundleDecoder> _sentDecoders = new Dictionary<string, FFXIVBundleDecoder>();
         private readonly Dictionary<string, FFXIVBundleDecoder> _receivedDecoders = new Dictionary<string, FFXIVBundleDecoder>();
@@ -144,8 +145,8 @@ namespace Machina.FFXIV
                 _ = DeucalionInjector.InjectLibrary((int)ProcessID, library);
 
                 _deucalionClient = new DeucalionClient();
-                _deucalionClient.MessageSent = (message) => ProcessDeucalionMessage(message, true);
-                _deucalionClient.MessageReceived = (message) => ProcessDeucalionMessage(message, false);
+                _deucalionClient.MessageSent = (message, conn) => ProcessDeucalionMessage(message, true, conn);
+                _deucalionClient.MessageReceived = (message, conn) => ProcessDeucalionMessage(message, false, conn);
                 _deucalionClient.Connect((int)ProcessID);
             }
             else
@@ -230,21 +231,24 @@ namespace Machina.FFXIV
 
         }
 
-        public void ProcessDeucalionMessage(byte[] data, bool isSend)
+        public void ProcessDeucalionMessage(byte[] data, bool isSend, ConnectionType connectionType)
         {
             // TCP Connection is irrelevent for this, but needed by interface, so make new one.
             TCPConnection connection = new TCPConnection();
             connection.ProcessId = ProcessID;
 
+            int set = _deucalionSet ? 0 : 1;
+            _deucalionSet = !_deucalionSet;
+
             (long epoch, byte[] packet) = DeucalionClient.ConvertDeucalionFormatToPacketFormat(data);
 
             if (isSend)
             {
-                OnMessageSent(connection, epoch, packet);
+                OnMessageSent(connection, epoch, packet, set, connectionType);
             }
             else
             {
-                OnMessageReceived(connection, epoch, packet);
+                OnMessageReceived(connection, epoch, packet, set, connectionType);
             }
         }
 
