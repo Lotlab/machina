@@ -243,17 +243,38 @@ namespace Machina.Sockets
                     else
                     {
                         pcap_pkthdr packetHeader = *(pcap_pkthdr*)packetHeaderPtr;
-                        if (packetHeader.caplen <= layer2Length)
+
+                        // account for 802.1Q / 802.1ad VLAN tags, which add 4 bytes each after the ethernet header.
+                        // the IP payload offset is determined dynamically per packet.
+                        int ipOffset = layer2Length;
+                        if (_activeDevice.LinkType == DLT_EN10MB)
+                        {
+                            if (packetHeader.caplen < 14)
+                                continue;
+
+                            byte* packetData = (byte*)packetDataPtr;
+                            int etherTypePosition = 12;
+                            int etherType = ReadNetworkUInt16(packetData + etherTypePosition);
+                            while ((etherType == 0x8100 || etherType == 0x88A8 || etherType == 0x9100)
+                                   && ipOffset + 4 <= packetHeader.caplen)
+                            {
+                                etherTypePosition += 4;
+                                ipOffset += 4;
+                                etherType = ReadNetworkUInt16(packetData + etherTypePosition);
+                            }
+                        }
+
+                        if (packetHeader.caplen <= ipOffset)
                             continue;
 
-                        // prepare data - skip the 14-byte ethernet header
-                        int allocatedSize = (int)packetHeader.caplen - layer2Length;
+                        // prepare data - skip the layer2 header and any vlan tags
+                        int allocatedSize = (int)packetHeader.caplen - ipOffset;
                         if (allocatedSize > 0x1000000)
                             Trace.WriteLine($"PCapCaptureSocket: packet length too large: {allocatedSize} ", "DEBUG-MACHINA");
                         else
                         {
                             byte[] buffer = new byte[allocatedSize];
-                            Marshal.Copy(packetDataPtr + layer2Length, buffer, 0, allocatedSize);
+                            Marshal.Copy(packetDataPtr + ipOffset, buffer, 0, allocatedSize);
 
                             _pendingBuffers.Enqueue(new Tuple<byte[], int>(buffer, allocatedSize));
                         }
@@ -270,6 +291,11 @@ namespace Machina.Sockets
                     Task.Delay(100, token).Wait(token);
                 }
             }
+        }
+
+        private static unsafe int ReadNetworkUInt16(byte* data)
+        {
+            return (data[0] << 8) | data[1];
         }
 
         private void FreeDevice()
