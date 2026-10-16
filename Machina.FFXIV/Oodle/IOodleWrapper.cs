@@ -13,10 +13,24 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see<http://www.gnu.org/licenses/>.
 
+using Machina.FFXIV.Memory;
+
 namespace Machina.FFXIV.Oodle
 {
     public interface IOodleWrapper
     {
+        /// <summary>
+        /// Sizes of the state buffers held by this wrapper.  They are needed to copy a
+        /// matching state out of the game process, see <see cref="UpdateFrom"/>.
+        /// </summary>
+        OodleStateLayout Layout { get; }
+
         unsafe bool Decompress(byte[] payload, int offset, int compressedLength, byte[] plaintext, int decompressedLength);
+
+        /// <summary>
+        /// Replaces the decompression state with a snapshot taken from another process,
+        /// for example via <see cref="MemoryScanner"/>.
+        /// </summary>
+        void UpdateFrom(byte[] state, byte[] shared, byte[] window);
     }
 }

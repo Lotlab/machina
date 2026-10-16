@@ -27,13 +27,13 @@ namespace Machina.FFXIV.Oodle
         private delegate int OodleNetwork1UDP_State_Size_Func();
         private delegate int OodleNetwork1TCP_State_Size_Func();
         private delegate int OodleNetwork1_Shared_Size_Func(int htbits);
-        private delegate void OodleNetwork1_Shared_SetWindow_Action(byte[] data, int htbits, byte[] window, int windowSize);
-        private delegate void OodleNetwork1UDP_Train_Action(byte[] state, byte[] shared, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets);
-        private delegate void OodleNetwork1TCP_Train_Action(byte[] state, byte[] shared, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets);
-        private unsafe delegate bool OodleNetwork1UDP_Decode_Func(byte[] state, byte[] shared, byte* compressed, int compressedSize, byte[] raw, int rawSize);
-        private unsafe delegate bool OodleNetwork1TCP_Decode_Func(byte[] state, byte[] shared, byte* compressed, int compressedSize, byte[] raw, int rawSize);
-        private delegate bool OodleNetwork1UDP_Encode_Func(byte[] state, byte[] shared, byte[] raw, int rawSize, byte[] compressed);
-        private delegate bool OodleNetwork1TCP_Encode_Func(byte[] state, byte[] shared, byte[] raw, int rawSize, byte[] compressed);
+        private delegate void OodleNetwork1_Shared_SetWindow_Action(IntPtr data, int htbits, IntPtr window, int windowSize);
+        private delegate void OodleNetwork1UDP_Train_Action(IntPtr state, IntPtr shared, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets);
+        private delegate void OodleNetwork1TCP_Train_Action(IntPtr state, IntPtr shared, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets);
+        private unsafe delegate bool OodleNetwork1UDP_Decode_Func(IntPtr state, IntPtr shared, byte* compressed, int compressedSize, byte[] raw, int rawSize);
+        private unsafe delegate bool OodleNetwork1TCP_Decode_Func(IntPtr state, IntPtr shared, byte* compressed, int compressedSize, byte[] raw, int rawSize);
+        private delegate bool OodleNetwork1UDP_Encode_Func(IntPtr state, IntPtr shared, byte[] raw, int rawSize, byte[] compressed);
+        private delegate bool OodleNetwork1TCP_Encode_Func(IntPtr state, IntPtr shared, byte[] raw, int rawSize, byte[] compressed);
         private delegate IntPtr OodleMalloc_Func(IntPtr a, int b);
         private delegate void OodleFree_Action(IntPtr a);
 
@@ -261,25 +261,25 @@ namespace Machina.FFXIV.Oodle
             return _OodleNetwork1_Shared_Size.Invoke(htbits);
         }
 
-        public void OodleNetwork1_Shared_SetWindow(byte[] data, int htbits, byte[] window, int windowSize)
+        public void OodleNetwork1_Shared_SetWindow(IntPtr data, int htbits, IntPtr window, int windowSize)
         {
             if (Initialized)
                 _OodleNetwork1_Shared_SetWindow.Invoke(data, htbits, window, windowSize);
         }
 
-        public void OodleNetwork1UDP_Train(byte[] state, byte[] share, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets)
+        public void OodleNetwork1UDP_Train(IntPtr state, IntPtr share, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets)
         {
             if (Initialized)
                 _OodleNetwork1UDP_Train.Invoke(state, share, training_packet_pointers, training_packet_sizes, num_training_packets);
         }
 
-        public void OodleNetwork1TCP_Train(byte[] state, byte[] share, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets)
+        public void OodleNetwork1TCP_Train(IntPtr state, IntPtr share, IntPtr training_packet_pointers, IntPtr training_packet_sizes, int num_training_packets)
         {
             if (Initialized)
                 _OodleNetwork1TCP_Train.Invoke(state, share, training_packet_pointers, training_packet_sizes, num_training_packets);
         }
 
-        public unsafe bool OodleNetwork1UDP_Decode(byte[] state, byte[] share, IntPtr compressed, int compressedSize, byte[] raw, int rawSize)
+        public unsafe bool OodleNetwork1UDP_Decode(IntPtr state, IntPtr share, IntPtr compressed, int compressedSize, byte[] raw, int rawSize)
         {
             if (!Initialized)
                 return false;
@@ -287,7 +287,7 @@ namespace Machina.FFXIV.Oodle
             return _OodleNetwork1UDP_Decode.Invoke(state, share, (byte*)compressed, compressedSize, raw, rawSize);
         }
 
-        public unsafe bool OodleNetwork1TCP_Decode(byte[] state, byte[] share, IntPtr compressed, int compressedSize, byte[] raw, int rawSize)
+        public unsafe bool OodleNetwork1TCP_Decode(IntPtr state, IntPtr share, IntPtr compressed, int compressedSize, byte[] raw, int rawSize)
         {
             if (!Initialized)
                 return false;
@@ -295,7 +295,7 @@ namespace Machina.FFXIV.Oodle
             return _OodleNetwork1TCP_Decode.Invoke(state, share, (byte*)compressed, compressedSize, raw, rawSize);
         }
 
-        public bool OodleNetwork1UDP_Encode(byte[] state, byte[] share, byte[] raw, int rawSize, byte[] compressed)
+        public bool OodleNetwork1UDP_Encode(IntPtr state, IntPtr share, byte[] raw, int rawSize, byte[] compressed)
         {
             if (!Initialized)
                 return false;
@@ -303,7 +303,7 @@ namespace Machina.FFXIV.Oodle
             return _OodleNetwork1UDP_Encode.Invoke(state, share, raw, rawSize, compressed);
         }
 
-        public bool OodleNetwork1TCP_Encode(byte[] state, byte[] share, byte[] raw, int rawSize, byte[] compressed)
+        public bool OodleNetwork1TCP_Encode(IntPtr state, IntPtr share, byte[] raw, int rawSize, byte[] compressed)
         {
             if (!Initialized)
                 return false;

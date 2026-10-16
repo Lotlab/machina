@@ -17,42 +17,22 @@ using System;
 
 namespace Machina.FFXIV.Oodle
 {
-    public class OodleTCPWrapper : IOodleWrapper
+    public class OodleTCPWrapper : OodleWrapper
     {
-        private const byte HashtableBits = 17; // 19 for UDP
-        private const int WindowSize = 0x100000; // 0x16000
-
-        private readonly byte[] _state;
-        private readonly byte[] _shared;
-        private readonly byte[] _window = new byte[WindowSize];
-
-        private readonly IOodleNative _oodleNative;
-
         public OodleTCPWrapper(IOodleNative native)
+            : base(native, native.OodleNetwork1TCP_State_Size(), isUdp: false)
         {
-            _oodleNative = native;
-
-            int stateSize = _oodleNative.OodleNetwork1TCP_State_Size(); // change for UDP
-            int sharedSize = _oodleNative.OodleNetwork1_Shared_Size(HashtableBits);
-
-            _state = new byte[stateSize];
-            _shared = new byte[sharedSize];
-
-            _oodleNative.OodleNetwork1_Shared_SetWindow(_shared, HashtableBits, _window, _window.Length);
-
-            _oodleNative.OodleNetwork1TCP_Train(_state, _shared, IntPtr.Zero, IntPtr.Zero, 0); // change for UDP
+            Initialize();
         }
 
-        public unsafe bool Decompress(byte[] payload, int offset, int compressedLength, byte[] plaintext, int decompressedLength)
+        protected override void Train(IntPtr state, IntPtr shared)
         {
-            fixed (byte* pPayload = payload)
-            {
-                if (!_oodleNative.OodleNetwork1TCP_Decode(_state, _shared, new IntPtr(pPayload + offset), // change for UDP
-                    compressedLength, plaintext, decompressedLength))
-                    return false;
-            }
+            Native.OodleNetwork1TCP_Train(state, shared, IntPtr.Zero, IntPtr.Zero, 0);
+        }
 
-            return true;
+        protected override bool Decode(IntPtr state, IntPtr shared, IntPtr compressed, int compressedSize, byte[] raw, int rawSize)
+        {
+            return Native.OodleNetwork1TCP_Decode(state, shared, compressed, compressedSize, raw, rawSize);
         }
     }
 }

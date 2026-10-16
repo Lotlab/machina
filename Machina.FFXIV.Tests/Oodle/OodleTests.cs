@@ -39,7 +39,7 @@ namespace Machina.FFXIV.Tests.Oodle
             Moq.Mock<IOodleNative> mockOodleNative = new();
             _ = mockOodleNative.Setup(x => x.OodleNetwork1UDP_State_Size()).Returns(1);
             _ = mockOodleNative.Setup(x => x.OodleNetwork1_Shared_Size(Moq.It.IsAny<int>())).Returns(1);
-            _ = mockOodleNative.Setup(x => x.OodleNetwork1UDP_Decode(Moq.It.IsAny<byte[]>(), Moq.It.IsAny<byte[]>(),
+            _ = mockOodleNative.Setup(x => x.OodleNetwork1UDP_Decode(Moq.It.IsAny<IntPtr>(), Moq.It.IsAny<IntPtr>(),
                 Moq.It.IsAny<IntPtr>(), Moq.It.IsAny<int>(), Moq.It.IsAny<byte[]>(), Moq.It.IsAny<int>())).Returns(true);
 
             FFXIV.Oodle.OodleUDPWrapper sut = new(mockOodleNative.Object);

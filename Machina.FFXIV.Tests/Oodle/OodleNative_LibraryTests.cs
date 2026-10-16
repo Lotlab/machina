@@ -80,8 +80,8 @@ namespace Machina.FFXIV.Tests.Oodle
             const int htbits = 0x13;
             int sharedSize = _sut.OodleNetwork1_Shared_Size(htbits);
 
-            byte[] window = new byte[0x8000];
-            byte[] shared = new byte[sharedSize];
+            using NativeBuffer window = new NativeBuffer(0x8000);
+            using NativeBuffer shared = new NativeBuffer(sharedSize);
 
             _sut.OodleNetwork1_Shared_SetWindow(shared, htbits, window, window.Length);
 
@@ -95,9 +95,9 @@ namespace Machina.FFXIV.Tests.Oodle
             int stateSize = _sut.OodleNetwork1UDP_State_Size();
             int sharedSize = _sut.OodleNetwork1_Shared_Size(htbits);
 
-            byte[] window = new byte[0x8000];
-            byte[] shared = new byte[sharedSize];
-            byte[] state = new byte[stateSize];
+            using NativeBuffer window = new NativeBuffer(0x8000);
+            using NativeBuffer shared = new NativeBuffer(sharedSize);
+            using NativeBuffer state = new NativeBuffer(stateSize);
 
             _sut.OodleNetwork1_Shared_SetWindow(shared, htbits, window, window.Length);
             _sut.OodleNetwork1UDP_Train(state, shared, IntPtr.Zero, IntPtr.Zero, 0);
@@ -112,9 +112,9 @@ namespace Machina.FFXIV.Tests.Oodle
             int stateSize = _sut.OodleNetwork1UDP_State_Size();
             int sharedSize = _sut.OodleNetwork1_Shared_Size(htbits);
 
-            byte[] window = new byte[0x8000];
-            byte[] shared = new byte[sharedSize];
-            byte[] state = new byte[stateSize];
+            using NativeBuffer window = new NativeBuffer(0x8000);
+            using NativeBuffer shared = new NativeBuffer(sharedSize);
+            using NativeBuffer state = new NativeBuffer(stateSize);
 
             _sut.OodleNetwork1_Shared_SetWindow(shared, htbits, window, window.Length);
             _sut.OodleNetwork1UDP_Train(state, shared, IntPtr.Zero, IntPtr.Zero, 0);
