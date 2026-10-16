@@ -19,6 +19,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using Machina.FFXIV.Headers;
+using Machina.FFXIV.Memory;
 using Machina.Infrastructure;
 
 namespace Machina.FFXIV
@@ -32,6 +33,17 @@ namespace Machina.FFXIV
         private Oodle.IOodleWrapper _oodle;
 
         public Queue<Tuple<long, byte[]>> Messages = new Queue<Tuple<long, byte[]>>(20);
+
+        /// <summary>
+        /// Raised when the decoder detects that it lost sync with the bundle stream, for
+        /// example because the Oodle decompression state is out of date.
+        /// </summary>
+        internal event Action<FFXIVBundleDecoder> DecodeFailedHandler;
+
+        /// <summary>
+        /// Sizes of the Oodle state buffers, or null when no Oodle state has been created yet.
+        /// </summary>
+        internal OodleStateLayout? OodleLayout => _oodle?.Layout;
 
         public DateTime LastMessageTimestamp
         { get; set; } = DateTime.MinValue;
@@ -123,6 +135,18 @@ namespace Machina.FFXIV
                             for (int i = 0; i < header.message_count; i++)
                             {
                                 ushort message_length = ((ushort*)(msgPtr + message_offset))[0];
+
+                                // A non-zero padding word indicates the stream is out of sync:
+                                // give up on the remainder of the bundle and let listeners
+                                // resynchronize the decompression state.
+                                if (message_offset + 2 * sizeof(ushort) <= messageBufferSize &&
+                                    ((ushort*)(msgPtr + message_offset))[1] != 0)
+                                {
+                                    Trace.WriteLine("FFXIVBundleDecoder: Decode failed, discarding the remaining bundle data.", "DEBUG-MACHINA");
+                                    DecodeFailedHandler?.Invoke(this);
+                                    return;
+                                }
+
                                 byte[] data = new byte[message_length];
                                 Array.Copy(message, message_offset, data, 0, data.Length);
 
@@ -230,6 +254,26 @@ namespace Machina.FFXIV
             }
 
             return _decompressionBuffer;
+        }
+
+        /// <summary>
+        /// Creates the Oodle decoder, so a state can be applied before the first bundle arrives.
+        /// </summary>
+        private void CreateOodle()
+        {
+            if (_oodle == null)
+                _oodle = Oodle.OodleFactory.Create();
+        }
+
+        /// <summary>
+        /// Applies an Oodle decompression state read from another process by
+        /// <see cref="MemoryScanner"/>.  This is used to resynchronize a stream whose
+        /// dictionary no longer matches the game's.
+        /// </summary>
+        internal void SetOodleState(byte[] state, byte[] shared, byte[] window)
+        {
+            CreateOodle();
+            _oodle?.UpdateFrom(state, shared, window);
         }
 
         private unsafe int ResetStream(int offset)

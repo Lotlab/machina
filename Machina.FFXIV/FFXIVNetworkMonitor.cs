@@ -15,8 +15,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using Machina.FFXIV.Deucalion;
+using Machina.FFXIV.Memory;
 using Machina.Infrastructure;
 
 namespace Machina.FFXIV
@@ -121,6 +123,8 @@ namespace Machina.FFXIV
         private readonly Dictionary<string, FFXIVBundleDecoder> _sentDecoders = new Dictionary<string, FFXIVBundleDecoder>();
         private readonly Dictionary<string, FFXIVBundleDecoder> _receivedDecoders = new Dictionary<string, FFXIVBundleDecoder>();
 
+        private MemoryScanner _memoryScanner;
+
         /// <summary>
         /// Validates the parameters and starts the monitor.
         /// </summary>
@@ -203,11 +207,28 @@ namespace Machina.FFXIV
             _receivedDecoders.Clear();
         }
 
+        /// <summary>
+        /// Applies an Oodle decompression state to the decoder of the supplied connection,
+        /// creating that decoder when needed.  Both the send and the receive direction have
+        /// to be set separately.
+        /// </summary>
+        private void SetOodleState(TCPConnection connection, bool isTx, byte[] state, byte[] shared, byte[] window)
+        {
+            Dictionary<string, FFXIVBundleDecoder> decoders = isTx ? _sentDecoders : _receivedDecoders;
+            if (!decoders.TryGetValue(connection.ID, out FFXIVBundleDecoder decoder))
+            {
+                decoder = CreateDecoder(connection);
+                decoders[connection.ID] = decoder;
+            }
+
+            decoder.SetOodleState(state, shared, window);
+        }
+
         public void ProcessSentMessage(TCPConnection connection, byte[] data)
         {
             Tuple<long, byte[]> message;
             if (!_sentDecoders.ContainsKey(connection.ID))
-                _sentDecoders.Add(connection.ID, new FFXIVBundleDecoder());
+                _sentDecoders.Add(connection.ID, CreateDecoder(connection));
 
             _sentDecoders[connection.ID].StoreData(data);
             while ((message = _sentDecoders[connection.ID].GetNextFFXIVMessage()) != null)
@@ -220,7 +241,7 @@ namespace Machina.FFXIV
         {
             Tuple<long, byte[]> message;
             if (!_receivedDecoders.ContainsKey(connection.ID))
-                _receivedDecoders.Add(connection.ID, new FFXIVBundleDecoder());
+                _receivedDecoders.Add(connection.ID, CreateDecoder(connection));
 
             _receivedDecoders[connection.ID].StoreData(data);
             while ((message = _receivedDecoders[connection.ID].GetNextFFXIVMessage()) != null)
@@ -228,6 +249,122 @@ namespace Machina.FFXIV
                 OnMessageReceived(connection, message.Item1, message.Item2);
             }
 
+        }
+
+        private FFXIVBundleDecoder CreateDecoder(TCPConnection connection)
+        {
+            var decoder = new FFXIVBundleDecoder();
+            decoder.DecodeFailedHandler += (dec) =>
+            {
+                // Deucalion already delivers decoded packets, so there is nothing to resync.
+                if (!UseDeucalion)
+                    RecoverOodleState(dec, connection);
+            };
+            return decoder;
+        }
+
+        /// <summary>
+        /// Copies the current Oodle state out of the game process and applies it to the
+        /// decoder that lost sync.
+        /// </summary>
+        private void RecoverOodleState(FFXIVBundleDecoder decoder, TCPConnection connection)
+        {
+            try
+            {
+                OodleStateLayout? layout = decoder.OodleLayout;
+                if (layout == null || !layout.Value.IsValid)
+                    return;
+
+                MemoryScanner scanner = EnsureMemoryScanner();
+                if (scanner == null)
+                    return;
+
+                ClientState? state = IsChatChannel(connection)
+                    ? scanner.GetChatState(layout.Value)
+                    : scanner.GetZoneState(layout.Value);
+
+                if (state == null)
+                {
+                    Trace.WriteLine($"FFXIVNetworkMonitor: Unable to read the oodle state of {connection} from game memory.", "DEBUG-MACHINA");
+                    return;
+                }
+
+                SetOodleState(connection, true, state.Value.Tx.State, state.Value.Tx.Shared, state.Value.Tx.Window);
+                SetOodleState(connection, false, state.Value.Rx.State, state.Value.Rx.Shared, state.Value.Rx.Window);
+
+                Trace.WriteLine($"FFXIVNetworkMonitor: Oodle state of {connection} was restored from game memory.", "DEBUG-MACHINA");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"FFXIVNetworkMonitor: Oodle state recovery for {connection} failed: {ex}", "DEBUG-MACHINA");
+            }
+        }
+
+        private MemoryScanner EnsureMemoryScanner()
+        {
+            if (_memoryScanner == null)
+                _memoryScanner = new MemoryScanner();
+
+            if (!_memoryScanner.IsOpen)
+                return OpenMemoryScanner() ? _memoryScanner : null;
+
+            // The network module is recreated on zone changes, so resolve it again.
+            if (_memoryScanner.SearchNetworkingModule())
+                return _memoryScanner;
+
+            // The cached module snapshot may be stale (game restarted or patched).
+            _memoryScanner.Close();
+            return OpenMemoryScanner() ? _memoryScanner : null;
+        }
+
+        private bool OpenMemoryScanner()
+        {
+            if (ProcessID != 0)
+            {
+                _memoryScanner.Open((int)ProcessID);
+                return true;
+            }
+
+            // Resolve the window exactly like the packet capture does, so both ends read
+            // the same client when several are running.  ProcessIDList is deliberately not
+            // used: an Oodle state belongs to one process, and picking one of several would
+            // be a guess.
+            if (!string.IsNullOrWhiteSpace(WindowName))
+            {
+                IList<uint> processIds = ProcessTCPInfo.GetProcessIDByWindow(null, WindowName);
+                if (processIds.Count > 0)
+                {
+                    _memoryScanner.Open((int)processIds[0]);
+                    return true;
+                }
+
+                Trace.WriteLine($"FFXIVNetworkMonitor: No process found for window '{WindowName}', falling back to the process name.", "DEBUG-MACHINA");
+            }
+
+            return _memoryScanner.Open();
+        }
+
+        /// <summary>
+        /// The chat channel is opened after the zone channel, so its local port is higher.
+        /// </summary>
+        private bool IsChatChannel(TCPConnection connection)
+        {
+            IList<TCPConnection> connections = _monitor?.Connections;
+            if (connections == null)
+                return false;
+
+            bool isChatChannel = false;
+
+            foreach (TCPConnection item in connections)
+            {
+                if (item.RemoteIP != connection.RemoteIP || item.RemotePort != connection.RemotePort)
+                    continue;
+
+                if (item.LocalPort < connection.LocalPort)
+                    isChatChannel = true;
+            }
+
+            return isChatChannel;
         }
 
         public void ProcessDeucalionMessage(byte[] data, bool isSend)
@@ -256,6 +393,8 @@ namespace Machina.FFXIV
                 if (disposing)
                 {
                     _monitor?.Dispose();
+                    _memoryScanner?.Dispose();
+                    _memoryScanner = null;
                 }
                 _disposedValue = true;
             }

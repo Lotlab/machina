@@ -14,6 +14,7 @@
 // along with this program.  If not, see<http://www.gnu.org/licenses/>.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -76,6 +77,11 @@ namespace Machina
         private readonly ConnectionManager _connectionManager = new ConnectionManager();
         private Task _monitorTask;
         private CancellationTokenSource _tokenSource;
+
+        /// <summary>
+        /// The connections that are currently being monitored.
+        /// </summary>
+        public IList<TCPConnection> Connections => _connectionManager.Connections;
 
         private bool _disposedValue;
         private DateTime _lastLoopError = DateTime.MinValue;
