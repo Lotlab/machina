@@ -202,6 +202,20 @@ namespace Machina.FFXIV.Memory
             if (shared == IntPtr.Zero || window == IntPtr.Zero || state == IntPtr.Zero)
                 return null;
 
+            // The shared dictionary starts with the window bounds (m_lzp_window and
+            // m_lzp_window_end), so its first 16 bytes have to point at the window buffer.
+            // When they do not, the state is not laid out the way the local decoder expects:
+            // give up rather than inject something that would corrupt the decoder.
+            long windowAddress = window.ToInt64();
+            long windowStart = _reader.GetIntPtr(shared, 0).ToInt64();
+            long windowEnd = _reader.GetIntPtr(shared, 8).ToInt64();
+            if (windowStart != windowAddress || windowEnd != windowAddress + layout.WindowSize)
+            {
+                Trace.WriteLine($"{nameof(MemoryScanner)}: Oodle shared data first 16 bytes do not match. " +
+                    $"window {windowAddress:X16}, shared[0] {windowStart:X16}, shared[8] {windowEnd:X16}", "DEBUG-MACHINA");
+                return null;
+            }
+
             byte[] sharedData = _reader.Read(shared, layout.SharedSize);
             byte[] windowData = _reader.Read(window, layout.WindowSize);
             byte[] stateData = _reader.Read(state, layout.StateSize);

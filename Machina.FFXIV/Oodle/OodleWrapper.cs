@@ -29,11 +29,12 @@ namespace Machina.FFXIV.Oodle
         protected const byte HashtableBits = 17; // 19 for UDP on older clients
         private const int WindowSize = 0x100000; // 0x16000 on older clients
 
-        // Offsets of the window start/end pointers inside the shared dictionary.  They are
-        // restored after a foreign state is copied in, since its pointers only refer to the
-        // address space of the process the state was read from.
-        private const int SharedWindowStartOffset = 8;
-        private const int SharedWindowEndOffset = 16;
+        // Offsets of the window pointers that OodleNetwork1_Shared_SetWindow fills in and the
+        // native decoder reads back (m_lzp_window and m_lzp_window_end).  A state copied from
+        // another process holds addresses that are only valid there, so they are repointed at
+        // the local window after the copy.
+        private const int SharedWindowStartOffset = 0;
+        private const int SharedWindowEndOffset = 8;
 
         protected IOodleNative Native { get; }
 
