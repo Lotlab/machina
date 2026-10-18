@@ -216,6 +216,144 @@ namespace Machina.FFXIV.Tests
             Assert.AreEqual(351, messageCount);
         }
 
+        /// <summary>
+        /// A bundle decompressed with the wrong dictionary has to be dropped whole: the messages
+        /// in front of the damaged one are decoded from the same bad data, and the bundles behind
+        /// it must still be delivered.
+        /// </summary>
+        [TestMethod]
+        public void FFXIVBundle_StoreData_DamagedBundleIsDroppedWhole()
+        {
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+            byte[] good = TestBundles.Uncompressed(1, TestBundles.Message(0xCC));
+
+            FFXIVBundleDecoder sut = new();
+
+            sut.StoreData(TestBundles.Concat(damaged, good));
+
+            Assert.HasCount(1, sut.Messages);
+            Assert.AreEqual(0xCC, sut.GetNextFFXIVMessage().Item2[4]);
+        }
+
+        [TestMethod]
+        public void FFXIVBundle_StoreData_RepeatedFailureIsRateLimited()
+        {
+            int requests = 0;
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+
+            FFXIVBundleDecoder sut = new();
+            sut.DecodeFailedHandler += _ => { requests++; return false; };
+
+            sut.StoreData(damaged);
+            Assert.AreEqual(1, requests);
+
+            // A stream that keeps failing must not copy several megabytes out of the game client
+            // once per packet.
+            sut.StoreData(damaged);
+            Assert.AreEqual(1, requests);
+        }
+
+        /// <summary>
+        /// The interval a failed recovery set must not outlive that recovery: once a bundle decodes,
+        /// the stream is in sync, and the next loss of sync has to be able to ask for a state right
+        /// away instead of waiting the interval out and dropping everything that arrives meanwhile.
+        /// </summary>
+        [TestMethod]
+        public void FFXIVBundle_StoreData_AGoodBundleResetsTheRecoveryBackoff()
+        {
+            int requests = 0;
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+            byte[] good = TestBundles.Uncompressed(1, TestBundles.Message(0xCC));
+
+            FFXIVBundleDecoder sut = new();
+            sut.DecodeFailedHandler += _ => { requests++; return false; };
+
+            sut.StoreData(damaged);
+            Assert.AreEqual(1, requests);
+
+            sut.StoreData(good);
+            Assert.IsTrue(sut.HasDecodedMessages);
+
+            // Well inside the interval the first failure set: without a reset this is skipped and
+            // every bundle that arrives in the meantime is dropped instead.
+            sut.StoreData(damaged);
+            Assert.AreEqual(2, requests);
+        }
+
+        /// <summary>
+        /// When the listener says it installed a state, the bundle that failed is tried once more
+        /// before it is given up on.
+        /// </summary>
+        [TestMethod]
+        public void FFXIVBundle_StoreData_RecoveryRetriesTheFailedBundle()
+        {
+            int requests = 0;
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+            byte[] good = TestBundles.Uncompressed(1, TestBundles.Message(0xCC));
+
+            FFXIVBundleDecoder sut = new();
+            sut.DecodeFailedHandler += _ => { requests++; return true; };
+
+            sut.StoreData(TestBundles.Concat(damaged, good));
+
+            Assert.AreEqual(1, requests);
+            Assert.HasCount(1, sut.Messages);
+            Assert.AreEqual(0xCC, sut.GetNextFFXIVMessage().Item2[4]);
+        }
+
+        /// <summary>
+        /// A state read out of the client can only decode the bundles sent after it was read, so
+        /// the bundles on hand are walked past and every one of them is tried from that state.
+        /// </summary>
+        [TestMethod]
+        public void FFXIVBundle_StoreData_ResyncWalksPastBundlesTheStateCannotDecode()
+        {
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+            byte[] good = TestBundles.Uncompressed(1, TestBundles.Message(0xCC));
+
+            FakeOodleWrapper wrapper = new();
+            FFXIVBundleDecoder sut = new();
+            TestReflection.InjectOodleWrapper(sut, wrapper);
+
+            sut.SetOodleState(new byte[wrapper.Layout.StateSize], new byte[wrapper.Layout.SharedSize], new byte[wrapper.Layout.WindowSize]);
+            sut.StoreData(TestBundles.Concat(damaged, good));
+
+            Assert.HasCount(1, sut.Messages);
+            Assert.AreEqual(0xCC, sut.GetNextFFXIVMessage().Item2[4]);
+            Assert.IsTrue(sut.HasDecodedMessages);
+
+            // One install, then one restore for the bundle that failed again before the good one
+            // decoded from it.
+            Assert.IsGreaterThanOrEqualTo(3, wrapper.UpdateCount, $"Expected the state to be applied again while resynchronizing, it was applied {wrapper.UpdateCount} time(s).");
+        }
+
+        /// <summary>
+        /// A state that does not decode the data on hand is given up on after enough bundles have
+        /// been tried against it, and what the decoder keeps is that state rather than whatever the
+        /// failed attempts left behind, so the first bundle that arrives next starts from it.
+        /// </summary>
+        [TestMethod]
+        public void FFXIVBundle_StoreData_GivingUpOnTheStateLeavesItLoaded()
+        {
+            const int bundles = 33; // one more than the bundles a restored state is tried against
+            byte[] damaged = TestBundles.Uncompressed(2, TestBundles.Message(0xAA), TestBundles.Message(0xBB, padding: 0x1234));
+
+            byte[][] all = new byte[bundles][];
+            for (int i = 0; i < bundles; i++)
+                all[i] = damaged;
+
+            FakeOodleWrapper wrapper = new();
+            FFXIVBundleDecoder sut = new();
+            TestReflection.InjectOodleWrapper(sut, wrapper);
+
+            sut.SetOodleState(new byte[wrapper.Layout.StateSize], new byte[wrapper.Layout.SharedSize], new byte[wrapper.Layout.WindowSize]);
+            sut.StoreData(TestBundles.Concat(all));
+
+            // One install, one restore in front of each of the bundles that were tried, and one more
+            // so the state left behind is the one that was read.
+            Assert.AreEqual(bundles + 2, wrapper.UpdateCount, $"Expected {bundles + 2} state applications, saw {wrapper.UpdateCount}.");
+        }
+
         /**
          * BUG: if magic0 matches but any of magic 1-3 is not 0, then StoreData will not return
          */
