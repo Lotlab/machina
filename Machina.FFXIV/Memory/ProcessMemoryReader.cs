@@ -123,11 +123,20 @@ namespace Machina.FFXIV.Memory
             return Read(address, buffer) == length ? buffer : null;
         }
 
-        public IntPtr GetIntPtr(IntPtr address, int offset = 0)
+        public bool TryGetIntPtr(IntPtr address, int offset, out IntPtr value)
         {
-            byte[] data = Read(IntPtr.Add(address, offset), 8);
-            return data == null ? IntPtr.Zero : new IntPtr(BitConverter.ToInt64(data, 0));
+            value = IntPtr.Zero;
+
+            byte[] data = Read(IntPtr.Add(address, offset), sizeof(long));
+            if (data == null || data.Length < sizeof(long))
+                return false;
+
+            value = new IntPtr(BitConverter.ToInt64(data, 0));
+            return true;
         }
+
+        public IntPtr GetIntPtr(IntPtr address, int offset = 0)
+            => TryGetIntPtr(address, offset, out IntPtr value) ? value : IntPtr.Zero;
 
         public int GetInt32(IntPtr address, int offset = 0)
         {

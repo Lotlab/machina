@@ -19,6 +19,25 @@ using System.Diagnostics;
 
 namespace Machina.FFXIV.Memory
 {
+    public enum NetworkModuleStatus
+    {
+        Unavailable,
+
+        /// <summary>
+        /// The cached image of the main module no longer contains the framework code, so the
+        /// game either restarted or was patched and the process has to be opened again.
+        /// </summary>
+        SignatureMissing,
+
+        /// <summary>Transient while the client is connecting.</summary>
+        ModuleNotReady,
+
+        /// <summary>Transient during login: the zone and chat clients are not both there yet.</summary>
+        ClientsNotReady,
+
+        Connected,
+    }
+
     /// <summary>
     /// Reads the live Oodle network decompression state out of a running FFXIV client.
     /// <para>
@@ -26,6 +45,11 @@ namespace Machina.FFXIV.Memory
     /// network channel in its process memory.  When Machina loses sync with the Oodle
     /// stream it can copy that state into its own decoder, which allows decoding to
     /// continue without waiting for the game to re-train the dictionary.
+    /// </para>
+    /// <para>
+    /// Locating the network module is split in two: the framework is looked up in the cached
+    /// module image once per open, while the module and client pointers are re-read on every
+    /// refresh, since the game recreates them on a zone change.
     /// </para>
     /// <para>
     /// Reading another process requires sufficient privileges, so Machina typically has
@@ -60,6 +84,8 @@ namespace Machina.FFXIV.Memory
         private const int RootStateUdpOffset = 0x8;
 
         private readonly ProcessMemoryReader _reader = new ProcessMemoryReader();
+
+        private IntPtr _frameworkAddress = IntPtr.Zero;
         private IntPtr _networkModule = IntPtr.Zero;
         private bool _disposed;
 
@@ -67,10 +93,12 @@ namespace Machina.FFXIV.Memory
         public int ProcessId => _reader.ProcessId;
         public IntPtr ModuleBase => _reader.ModuleBase;
 
+        public NetworkModuleStatus ModuleStatus { get; private set; } = NetworkModuleStatus.Unavailable;
+
         /// <summary>
         /// True when both the zone and the chat client were found in the game's network module.
         /// </summary>
-        public bool NetworkConnected { get; private set; }
+        public bool NetworkConnected => ModuleStatus == NetworkModuleStatus.Connected;
 
         /// <summary>
         /// Opens the first running game client, returning false when none is running.
@@ -100,7 +128,13 @@ namespace Machina.FFXIV.Memory
         public void Open(Process process)
         {
             _reader.Open(process);
-            SearchNetworkingModule();
+
+            // A new open means a new module image, so anything resolved for the previous one
+            // has to go.
+            _frameworkAddress = IntPtr.Zero;
+            _networkModule = IntPtr.Zero;
+
+            RefreshNetworkModule();
         }
 
         public void Open(int processId)
@@ -112,41 +146,107 @@ namespace Machina.FFXIV.Memory
         public void Close()
         {
             _reader.Close();
+            _frameworkAddress = IntPtr.Zero;
             _networkModule = IntPtr.Zero;
-            NetworkConnected = false;
+            SetStatus(NetworkModuleStatus.Unavailable);
         }
 
-        /// <summary>
-        /// Locates the game's network module.  This has to be repeated whenever the module
-        /// may have been recreated, for example after a zone change.
-        /// </summary>
-        public bool SearchNetworkingModule()
+        public NetworkModuleStatus RefreshNetworkModule()
         {
-            NetworkConnected = false;
             _networkModule = IntPtr.Zero;
 
             if (!_reader.IsOpen)
-                return false;
+                return SetStatus(NetworkModuleStatus.Unavailable);
 
+            if (_frameworkAddress == IntPtr.Zero && !ResolveFrameworkAddress())
+                return SetStatus(NetworkModuleStatus.SignatureMissing);
+
+            // The framework instance itself is read on every refresh, since the game may
+            // replace it; only the address of the pointer is worth caching.
+            if (!_reader.TryGetIntPtr(_frameworkAddress, 0, out IntPtr framework))
+                return SetStatus(NetworkModuleStatus.SignatureMissing);
+
+            if (framework == IntPtr.Zero)
+                return SetStatus(NetworkModuleStatus.ModuleNotReady);
+
+            if (!_reader.TryGetIntPtr(framework, FrameworkNetworkModuleProxyOffset, out IntPtr networkModuleProxy))
+                return SetStatus(NetworkModuleStatus.SignatureMissing);
+
+            if (networkModuleProxy == IntPtr.Zero)
+                return SetStatus(NetworkModuleStatus.ModuleNotReady);
+
+            if (!_reader.TryGetIntPtr(networkModuleProxy, NetworkModuleProxyValueOffset, out IntPtr networkModule))
+                return SetStatus(NetworkModuleStatus.SignatureMissing);
+
+            if (networkModule == IntPtr.Zero)
+                return SetStatus(NetworkModuleStatus.ModuleNotReady);
+
+            _networkModule = networkModule;
+
+            if (!_reader.TryGetIntPtr(networkModule, ZoneClientOffset, out IntPtr zoneClient) ||
+                !_reader.TryGetIntPtr(networkModule, ChatClientOffset, out IntPtr chatClient))
+                return SetStatus(NetworkModuleStatus.SignatureMissing);
+
+            return SetStatus(zoneClient != IntPtr.Zero && chatClient != IntPtr.Zero
+                ? NetworkModuleStatus.Connected
+                : NetworkModuleStatus.ClientsNotReady);
+        }
+
+        /// <summary>
+        /// <paramref name="openProcess"/> decides which client to read, so that policy stays on
+        /// the capture side; the scanner decides when it has to be called.  A network module
+        /// that does not exist yet is not a reason to reopen, and reopening is deliberately not
+        /// rate limited: a stale module image means the game restarted or was patched, where
+        /// waiting only delays recovery.
+        /// </summary>
+        public bool EnsureReady(Func<bool> openProcess)
+        {
+            if (openProcess == null)
+                throw new ArgumentNullException(nameof(openProcess));
+
+            if (!IsOpen)
+                return openProcess() && ModuleStatus == NetworkModuleStatus.Connected;
+
+            switch (RefreshNetworkModule())
+            {
+                case NetworkModuleStatus.Connected:
+                    return true;
+
+                case NetworkModuleStatus.SignatureMissing:
+                    Close();
+                    return openProcess() && ModuleStatus == NetworkModuleStatus.Connected;
+
+                default:
+                    // Reopening would not help here, and it is the only expensive part.
+                    return false;
+            }
+        }
+
+        private bool ResolveFrameworkAddress()
+        {
             ProcessMemoryReader.SignatureResult frameworkSignature = _reader.FindSignature(FrameworkSignature);
             if (!frameworkSignature.IsValid)
             {
-                Trace.WriteLine($"{nameof(MemoryScanner)}.{nameof(SearchNetworkingModule)}: Failed to find the framework instance.", "DEBUG-MACHINA");
+                Trace.WriteLine($"{nameof(MemoryScanner)}: Failed to find the framework signature in the module image.", "DEBUG-MACHINA");
                 return false;
             }
 
-            IntPtr frameworkAddress = frameworkSignature.GetRelativeAddress(0);
-            IntPtr framework = _reader.GetIntPtr(frameworkAddress);
-            IntPtr networkModuleProxy = _reader.GetIntPtr(framework, FrameworkNetworkModuleProxyOffset);
-            _networkModule = _reader.GetIntPtr(networkModuleProxy, NetworkModuleProxyValueOffset);
+            _frameworkAddress = frameworkSignature.GetRelativeAddress(0);
+            return true;
+        }
 
-            if (_networkModule == IntPtr.Zero)
-                return false;
+        /// <summary>
+        /// Reports a status change, and nothing when it repeats, so a stream that keeps failing
+        /// to decode does not flood the trace.
+        /// </summary>
+        private NetworkModuleStatus SetStatus(NetworkModuleStatus status)
+        {
+            if (status == ModuleStatus)
+                return status;
 
-            NetworkConnected = _reader.GetIntPtr(_networkModule, ZoneClientOffset) != IntPtr.Zero
-                && _reader.GetIntPtr(_networkModule, ChatClientOffset) != IntPtr.Zero;
-
-            return NetworkConnected;
+            ModuleStatus = status;
+            Trace.WriteLine($"{nameof(MemoryScanner)}: Network module status is {status}.", "DEBUG-MACHINA");
+            return status;
         }
 
         /// <summary>

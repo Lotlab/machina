@@ -305,43 +305,44 @@ namespace Machina.FFXIV
             if (_memoryScanner == null)
                 _memoryScanner = new MemoryScanner();
 
-            if (!_memoryScanner.IsOpen)
-                return OpenMemoryScanner() ? _memoryScanner : null;
-
-            // The network module is recreated on zone changes, so resolve it again.
-            if (_memoryScanner.SearchNetworkingModule())
-                return _memoryScanner;
-
-            // The cached module snapshot may be stale (game restarted or patched).
-            _memoryScanner.Close();
-            return OpenMemoryScanner() ? _memoryScanner : null;
+            return _memoryScanner.EnsureReady(TryOpenGameProcess) ? _memoryScanner : null;
         }
 
-        private bool OpenMemoryScanner()
+        private bool TryOpenGameProcess()
         {
-            if (ProcessID != 0)
+            try
             {
-                _memoryScanner.Open((int)ProcessID);
-                return true;
-            }
-
-            // Resolve the window exactly like the packet capture does, so both ends read
-            // the same client when several are running.  ProcessIDList is deliberately not
-            // used: an Oodle state belongs to one process, and picking one of several would
-            // be a guess.
-            if (!string.IsNullOrWhiteSpace(WindowName))
-            {
-                IList<uint> processIds = ProcessTCPInfo.GetProcessIDByWindow(null, WindowName);
-                if (processIds.Count > 0)
+                if (ProcessID != 0)
                 {
-                    _memoryScanner.Open((int)processIds[0]);
+                    _memoryScanner.Open((int)ProcessID);
                     return true;
                 }
 
-                Trace.WriteLine($"FFXIVNetworkMonitor: No process found for window '{WindowName}', falling back to the process name.", "DEBUG-MACHINA");
-            }
+                // Resolve the window exactly like the packet capture does, so both ends read
+                // the same client when several are running.  ProcessIDList is deliberately not
+                // used: an Oodle state belongs to one process, and picking one of several would
+                // be a guess.
+                if (!string.IsNullOrWhiteSpace(WindowName))
+                {
+                    IList<uint> processIds = ProcessTCPInfo.GetProcessIDByWindow(null, WindowName);
+                    if (processIds.Count > 0)
+                    {
+                        _memoryScanner.Open((int)processIds[0]);
+                        return true;
+                    }
 
-            return _memoryScanner.Open();
+                    Trace.WriteLine($"FFXIVNetworkMonitor: No process found for window '{WindowName}', falling back to the process name.", "DEBUG-MACHINA");
+                }
+
+                return _memoryScanner.Open();
+            }
+            catch (Exception ex)
+            {
+                // The game not being there, or not being readable, is expected: the client may
+                // be starting or shutting down.  Report it instead of letting it escape.
+                Trace.WriteLine($"FFXIVNetworkMonitor: Unable to open the game process for oodle state recovery: {ex.Message}", "DEBUG-MACHINA");
+                return false;
+            }
         }
 
         /// <summary>
