@@ -123,7 +123,14 @@ namespace Machina.FFXIV
         private readonly Dictionary<string, FFXIVBundleDecoder> _sentDecoders = new Dictionary<string, FFXIVBundleDecoder>();
         private readonly Dictionary<string, FFXIVBundleDecoder> _receivedDecoders = new Dictionary<string, FFXIVBundleDecoder>();
 
-        private MemoryScanner _memoryScanner;
+        private IOodleStateReader _memoryScanner;
+
+        /// <summary>
+        /// Creates the reader that copies Oodle state out of the game client.  It is only called
+        /// when no reader has been created yet, and exists so the recovery policy can be tested
+        /// without a game client.
+        /// </summary>
+        internal Func<IOodleStateReader> MemoryScannerFactory { get; set; } = () => new MemoryScanner();
 
         /// <summary>
         /// Validates the parameters and starts the monitor.
@@ -208,30 +215,34 @@ namespace Machina.FFXIV
         }
 
         /// <summary>
-        /// Applies an Oodle decompression state to the decoder of the supplied connection,
-        /// creating that decoder when needed.  Both the send and the receive direction have
-        /// to be set separately.
+        /// Applies an Oodle decompression state to the decoder of the supplied connection and
+        /// direction, creating that decoder when needed.  The send and the receive direction own
+        /// separate states, so each is set on its own.
         /// </summary>
         private void SetOodleState(TCPConnection connection, bool isTx, byte[] state, byte[] shared, byte[] window)
+        {
+            GetOrCreateDecoder(connection, isTx).SetOodleState(state, shared, window);
+        }
+
+        private FFXIVBundleDecoder GetOrCreateDecoder(TCPConnection connection, bool isTx)
         {
             Dictionary<string, FFXIVBundleDecoder> decoders = isTx ? _sentDecoders : _receivedDecoders;
             if (!decoders.TryGetValue(connection.ID, out FFXIVBundleDecoder decoder))
             {
-                decoder = CreateDecoder(connection);
+                decoder = CreateDecoder(connection, isTx);
                 decoders[connection.ID] = decoder;
             }
 
-            decoder.SetOodleState(state, shared, window);
+            return decoder;
         }
 
         public void ProcessSentMessage(TCPConnection connection, byte[] data)
         {
             Tuple<long, byte[]> message;
-            if (!_sentDecoders.ContainsKey(connection.ID))
-                _sentDecoders.Add(connection.ID, CreateDecoder(connection));
+            FFXIVBundleDecoder decoder = GetOrCreateDecoder(connection, true);
 
-            _sentDecoders[connection.ID].StoreData(data);
-            while ((message = _sentDecoders[connection.ID].GetNextFFXIVMessage()) != null)
+            decoder.StoreData(data);
+            while ((message = decoder.GetNextFFXIVMessage()) != null)
             {
                 OnMessageSent(connection, message.Item1, message.Item2);
             }
@@ -240,70 +251,114 @@ namespace Machina.FFXIV
         public void ProcessReceivedMessage(TCPConnection connection, byte[] data)
         {
             Tuple<long, byte[]> message;
-            if (!_receivedDecoders.ContainsKey(connection.ID))
-                _receivedDecoders.Add(connection.ID, CreateDecoder(connection));
+            FFXIVBundleDecoder decoder = GetOrCreateDecoder(connection, false);
 
-            _receivedDecoders[connection.ID].StoreData(data);
-            while ((message = _receivedDecoders[connection.ID].GetNextFFXIVMessage()) != null)
+            decoder.StoreData(data);
+            while ((message = decoder.GetNextFFXIVMessage()) != null)
             {
                 OnMessageReceived(connection, message.Item1, message.Item2);
             }
-
         }
 
-        private FFXIVBundleDecoder CreateDecoder(TCPConnection connection)
+        private FFXIVBundleDecoder CreateDecoder(TCPConnection connection, bool isTx)
         {
             var decoder = new FFXIVBundleDecoder();
             decoder.DecodeFailedHandler += (dec) =>
             {
                 // Deucalion already delivers decoded packets, so there is nothing to resync.
-                if (!UseDeucalion)
-                    RecoverOodleState(dec, connection);
+                if (UseDeucalion)
+                    return false;
+
+                return RecoverOodleState(dec, connection, isTx);
             };
             return decoder;
         }
 
         /// <summary>
-        /// Copies the current Oodle state out of the game process and applies it to the
-        /// decoder that lost sync.
+        /// Copies the current Oodle state of the direction that lost sync out of the game process
+        /// and applies it to its decoder.  Returns true when a state was installed, so the
+        /// decoder can try the bundle that failed once more before dropping it.
         /// </summary>
-        private void RecoverOodleState(FFXIVBundleDecoder decoder, TCPConnection connection)
+        private bool RecoverOodleState(FFXIVBundleDecoder decoder, TCPConnection connection, bool isTx)
         {
             try
             {
                 OodleStateLayout? layout = decoder.OodleLayout;
                 if (layout == null || !layout.Value.IsValid)
-                    return;
+                    return false;
 
-                MemoryScanner scanner = EnsureMemoryScanner();
+                IOodleStateReader scanner = EnsureMemoryScanner();
                 if (scanner == null)
-                    return;
+                    return false;
 
-                ClientState? state = IsChatChannel(connection)
-                    ? scanner.GetChatState(layout.Value)
-                    : scanner.GetZoneState(layout.Value);
+                bool isChatChannel = IsChatChannel(connection);
+                OodleState? state = isChatChannel
+                    ? scanner.GetChatState(layout.Value, isTx)
+                    : scanner.GetZoneState(layout.Value, isTx);
 
                 if (state == null)
                 {
-                    Trace.WriteLine($"FFXIVNetworkMonitor: Unable to read the oodle state of {connection} from game memory.", "DEBUG-MACHINA");
-                    return;
+                    Trace.WriteLine($"FFXIVNetworkMonitor: Unable to read the {Direction(isTx)} oodle state of {connection} from game memory.", "DEBUG-MACHINA");
+                    return false;
                 }
 
-                SetOodleState(connection, true, state.Value.Tx.State, state.Value.Tx.Shared, state.Value.Tx.Window);
-                SetOodleState(connection, false, state.Value.Rx.State, state.Value.Rx.Shared, state.Value.Rx.Window);
+                decoder.SetOodleState(state.Value.State, state.Value.Shared, state.Value.Window);
+                Trace.WriteLine($"FFXIVNetworkMonitor: {Direction(isTx)} oodle state of {connection} was restored from game memory.", "DEBUG-MACHINA");
 
-                Trace.WriteLine($"FFXIVNetworkMonitor: Oodle state of {connection} was restored from game memory.", "DEBUG-MACHINA");
+                // Recovery itself only needs the direction that lost sync.  The other direction is
+                // primed as well while it has never decoded anything, so a connection that just
+                // started does not have to wait for its own first failure, while a direction that
+                // is already in sync keeps its state.
+                PrimeOtherDirection(connection, isChatChannel, layout.Value, isTx, scanner);
+                return true;
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"FFXIVNetworkMonitor: Oodle state recovery for {connection} failed: {ex}", "DEBUG-MACHINA");
+                return false;
             }
         }
 
-        private MemoryScanner EnsureMemoryScanner()
+        /// <summary>
+        /// Gives the direction that did not fail a state while it has not decoded anything yet.
+        /// The state is at or after the client's position, so the decoder validates its first
+        /// bundles against it instead of trusting them.
+        /// <para>
+        /// Priming is a bonus on top of the recovery that was asked for, so nothing it does may
+        /// escape: the direction that lost sync already has its state, and reporting the whole
+        /// recovery as failed because the other direction could not be read would make the decoder
+        /// throw away the bundle it was about to retry.
+        /// </para>
+        /// </summary>
+        private void PrimeOtherDirection(TCPConnection connection, bool isChatChannel, OodleStateLayout layout, bool isTx, IOodleStateReader scanner)
+        {
+            try
+            {
+                Dictionary<string, FFXIVBundleDecoder> decoders = isTx ? _receivedDecoders : _sentDecoders;
+                if (decoders.TryGetValue(connection.ID, out FFXIVBundleDecoder other) && other.HasDecodedMessages)
+                    return;
+
+                OodleState? state = isChatChannel
+                    ? scanner.GetChatState(layout, !isTx)
+                    : scanner.GetZoneState(layout, !isTx);
+                if (state == null)
+                    return;
+
+                SetOodleState(connection, !isTx, state.Value.State, state.Value.Shared, state.Value.Window);
+                Trace.WriteLine($"FFXIVNetworkMonitor: {Direction(!isTx)} oodle state of {connection} was primed from game memory.", "DEBUG-MACHINA");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"FFXIVNetworkMonitor: Priming the {Direction(!isTx)} oodle state of {connection} failed: {ex}", "DEBUG-MACHINA");
+            }
+        }
+
+        private static string Direction(bool isTx) => isTx ? "send" : "receive";
+
+        private IOodleStateReader EnsureMemoryScanner()
         {
             if (_memoryScanner == null)
-                _memoryScanner = new MemoryScanner();
+                _memoryScanner = MemoryScannerFactory();
 
             return _memoryScanner.EnsureReady(TryOpenGameProcess) ? _memoryScanner : null;
         }

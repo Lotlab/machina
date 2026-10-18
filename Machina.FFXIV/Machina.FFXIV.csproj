@@ -42,6 +42,15 @@
         <None Remove="Ravahn.Machina.Keyfile.snk" />
     </ItemGroup>
 
+    <!-- The tests drive the decoder's failure handling and the monitor's recovery policy, which
+         are internal.  A strong named assembly needs the friend assembly's public key, so the
+         declaration is left out of the signed NuGet configuration. -->
+    <ItemGroup Condition=" '$(SignAssembly)' != 'true' ">
+        <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+            <_Parameter1>Machina.FFXIV.Tests</_Parameter1>
+        </AssemblyAttribute>
+    </ItemGroup>
+
     <ItemGroup>
         <EmbeddedResource Include="Headers\Opcodes\Chinese.txt" />
         <EmbeddedResource Include="Headers\Opcodes\Global.txt" />

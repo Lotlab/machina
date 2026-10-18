@@ -56,7 +56,7 @@ namespace Machina.FFXIV.Memory
     /// to run as administrator for this to work.
     /// </para>
     /// </summary>
-    public sealed class MemoryScanner : IDisposable
+    public sealed class MemoryScanner : IOodleStateReader
     {
         /// <summary>
         /// Process name of the DX11 game client.
@@ -99,6 +99,11 @@ namespace Machina.FFXIV.Memory
         /// True when both the zone and the chat client were found in the game's network module.
         /// </summary>
         public bool NetworkConnected => ModuleStatus == NetworkModuleStatus.Connected;
+
+        /// <summary>
+        /// Opens the first running game client, returning false when none is running.
+        /// </summary>
+        public bool Open() => Open(DefaultProcessName);
 
         /// <summary>
         /// Opens the first running game client, returning false when none is running.
@@ -259,6 +264,19 @@ namespace Machina.FFXIV.Memory
         /// </summary>
         public ClientState? GetChatState(OodleStateLayout layout) => GetState(GetChatSession(), layout);
 
+        /// <summary>
+        /// Reads one direction of the zone network channel's Oodle state, or null when
+        /// unavailable.  Recovery only needs the direction that lost sync, and the state of a
+        /// direction is a few megabytes, so it is worth asking for one at a time.
+        /// </summary>
+        public OodleState? GetZoneState(OodleStateLayout layout, bool isTx) => GetState(GetZoneSession(), layout, isTx);
+
+        /// <summary>
+        /// Reads one direction of the chat network channel's Oodle state, or null when
+        /// unavailable.
+        /// </summary>
+        public OodleState? GetChatState(OodleStateLayout layout, bool isTx) => GetState(GetChatSession(), layout, isTx);
+
         private IntPtr GetZoneSession()
         {
             IntPtr client = _reader.GetIntPtr(_networkModule, ZoneClientOffset);
@@ -290,6 +308,14 @@ namespace Machina.FFXIV.Memory
                 return null;
 
             return new ClientState { Tx = tx.Value, Rx = rx.Value };
+        }
+
+        private OodleState? GetState(IntPtr session, OodleStateLayout layout, bool isTx)
+        {
+            if (session == IntPtr.Zero || !layout.IsValid)
+                return null;
+
+            return ReadState(IntPtr.Add(session, isTx ? TxSessionOffset : RxSessionOffset), layout);
         }
 
         private OodleState? ReadState(IntPtr statePointer, OodleStateLayout layout)
