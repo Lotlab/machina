@@ -102,7 +102,7 @@ namespace Machina.FFXIV.Oodle
                     _OodleNetwork1UDP_Encode = (OodleNetwork1UDP_Encode_Func)Marshal.GetDelegateForFunctionPointer(
                         address, typeof(OodleNetwork1UDP_Encode_Func));
 
-                    address = NativeMethods.GetProcAddress(_libraryHandle, nameof(OodleNetwork1UDP_Encode));
+                    address = NativeMethods.GetProcAddress(_libraryHandle, nameof(OodleNetwork1TCP_Encode));
                     _OodleNetwork1TCP_Encode = (OodleNetwork1TCP_Encode_Func)Marshal.GetDelegateForFunctionPointer(
                         address, typeof(OodleNetwork1TCP_Encode_Func));
 

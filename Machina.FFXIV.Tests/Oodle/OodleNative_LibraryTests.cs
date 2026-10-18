@@ -139,5 +139,52 @@ namespace Machina.FFXIV.Tests.Oodle
 
             Assert.IsTrue(result);
         }
+
+        [TestMethod()]
+        public unsafe void OodleNetwork1TCP_EncodeDecodeTest()
+        {
+            if (!_sut.Initialized)
+                Assert.Inconclusive("oo2net library is not available.");
+
+            const int htbits = 17;
+            int stateSize = _sut.OodleNetwork1TCP_State_Size();
+            int sharedSize = _sut.OodleNetwork1_Shared_Size(htbits);
+
+            // The encoder and the decoder each own a state, the way the game and Machina do.
+            using NativeBuffer encoderWindow = new NativeBuffer(0x100000);
+            using NativeBuffer encoderShared = new NativeBuffer(sharedSize);
+            using NativeBuffer encoderState = new NativeBuffer(stateSize);
+            using NativeBuffer decoderWindow = new NativeBuffer(0x100000);
+            using NativeBuffer decoderShared = new NativeBuffer(sharedSize);
+            using NativeBuffer decoderState = new NativeBuffer(stateSize);
+
+            _sut.OodleNetwork1_Shared_SetWindow(encoderShared, htbits, encoderWindow, encoderWindow.Length);
+            _sut.OodleNetwork1TCP_Train(encoderState, encoderShared, IntPtr.Zero, IntPtr.Zero, 0);
+            _sut.OodleNetwork1_Shared_SetWindow(decoderShared, htbits, decoderWindow, decoderWindow.Length);
+            _sut.OodleNetwork1TCP_Train(decoderState, decoderShared, IntPtr.Zero, IntPtr.Zero, 0);
+
+            byte[] source = new byte[255];
+            byte[] uncompressed = new byte[255];
+            for (byte i = 0; i < source.Length; i++) source[i] = i;
+            byte[] compressed = new byte[source.Length];
+
+            // The TCP encode slot used to be bound to the UDP export, so this call handed a TCP
+            // state to the UDP encoder: it crashed the process instead of encoding anything.
+            bool result = _sut.OodleNetwork1TCP_Encode(encoderState, encoderShared, source, source.Length, compressed);
+            Assert.IsTrue(result);
+
+            fixed (byte* ptr = compressed)
+            {
+                result = _sut.OodleNetwork1TCP_Decode(decoderState, decoderShared, new IntPtr(ptr), compressed.Length, uncompressed, uncompressed.Length);
+            }
+            Assert.IsTrue(result);
+
+            // compare each byte
+            for (byte i = 0; i < source.Length; i++)
+                if (source[i] != uncompressed[i])
+                    result = false;
+
+            Assert.IsTrue(result);
+        }
     }
 }
