@@ -30,6 +30,14 @@ namespace Machina.FFXIV
         private readonly byte[] _decompressionBuffer = new byte[1024 * 128];
         private int _allocated;
 
+        /// <summary>
+        /// First word of the bundle magic, the byte sequence 52 52 A0 41.  Read back through a
+        /// little endian uint dereference it is 0x41a05252; as the network order hex that shows
+        /// up in packet dumps it is 0x5252a041.  Both comparisons that look for the magic have
+        /// to use this value.
+        /// </summary>
+        private const uint BundleMagic = 0x41a05252;
+
         private Oodle.IOodleWrapper _oodle;
 
         public Queue<Tuple<long, byte[]>> Messages = new Queue<Tuple<long, byte[]>>(20);
@@ -84,7 +92,7 @@ namespace Machina.FFXIV
                 {
                     Server_BundleHeader header = *(Server_BundleHeader*)(ptr + offset);
 
-                    if (header.magic0 != 0x41a05252)
+                    if (header.magic0 != BundleMagic)
                         if (header.magic0 != 0 && header.magic1 != 0 &&
                             header.magic2 != 0 && header.magic3 != 0)
                         {
@@ -295,7 +303,7 @@ namespace Machina.FFXIV
             {
                 for (int nextOffset = currentOffset + 1; nextOffset <= buffer.Length - 4; nextOffset++)
                 {
-                    if (((int*)(ptr + nextOffset))[0] == 0x5252a041)
+                    if (((uint*)(ptr + nextOffset))[0] == BundleMagic)
                         return nextOffset;
                 }
             }

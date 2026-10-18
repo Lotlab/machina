@@ -156,6 +156,25 @@ namespace Machina.FFXIV.Tests
         }
 
         [TestMethod]
+        public void FFXIVBundle_StoreData_BadMagicAndOneBundleInOneBuffer()
+        {
+            // Same bundles as FFXIVBundle_StoreData_BadMagicPlusOneBundle, but delivered in a
+            // single StoreData call, so the second bundle has to be found inside the buffer the
+            // decoder is already holding.  Scanning that buffer with the magic in the wrong byte
+            // order finds nothing and throws the whole buffer away.
+            byte[] data = ConversionUtility.HexStringToByteArray(
+                // changed '52' to '51' in first byte
+                "5152A041FF5D46E27F2A644D7B99C475047C4E3F5F0100005C000000000001000101000000000000789C33606060D8BF405A40E487AA0033C3FE0A1106574606065586B5E1AF2381520CDDDC20F205F311CE33D3818C070009600B8E" +
+                "5252A041FF5D46E27F2A644D7B99C475047C4E3F5F0100005C000000000001000101000000000000789C33606060D8BF405A40E487AA0033C3FE0A1106574606065586B5E1AF2381520CDDDC20F205F311CE33D3818C070009600B8E");
+
+            FFXIVBundleDecoder sut = new();
+            sut.StoreData(data);
+
+            Assert.HasCount(1, sut.Messages);
+            Assert.IsEmpty(TestInfrastructure.Listener.Messages);
+        }
+
+        [TestMethod]
         public void FFXIVBundle_BundleInMultipleIPPaylods()
         {
             // note: did not update
